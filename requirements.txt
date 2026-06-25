@@ -1,0 +1,12 @@
+torch>=2.1.0
+torchvision>=0.16.0
+# InsightFace_Pytorch is not pip-installable. Clone it and set INSIGHTFACE_PYTORCH_PATH:
+#   git clone https://github.com/TreB1eN/InsightFace_Pytorch ../InsightFace_Pytorch
+# Then download the IR-SE50 weights linked in that repo's README.
+pytorch-msssim>=0.2.1
+Pillow>=10.0.0
+numpy>=1.24.0
+tqdm>=4.65.0
+PyYAML>=6.0
+wandb>=0.16.0
+huggingface_hub>=0.23.0

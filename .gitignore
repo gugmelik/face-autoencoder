@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Model weights / external repo clone (fetched via scripts/)
+weights/
+InsightFace_Pytorch/
+*.pth
+*.pt
+
+# Datasets and outputs
+datasets/
+data_root/
+checkpoints/
+eval_results/
+*.zip
+
+# Experiment tracking
+wandb/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Claude Code local settings
+.claude/

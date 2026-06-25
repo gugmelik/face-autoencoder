@@ -1,0 +1,56 @@
+model:
+  # Adversarial autoencoder (AAE) with residual blocks and a *flat* split latent.
+  base_channels: 64        # multiply by 2/4/8 at deeper stages
+  num_residual_blocks: 2   # ResBlocks per stage (stem, bottleneck, each down/up)
+  # Flat latent split into [style | identity].  A bigger latent is sharper
+  # (small latents reconstruct blurry), so 1024 is a reasonable floor.
+  latent_dim: 1024
+  # First style_dim dims = AAE-regularised style (pose/lighting/expression);
+  # the remaining (latent_dim - style_dim) dims = identity, distilled from
+  # ArcFace.  The identity half MUST equal the ArcFace embedding size (512),
+  # so keep latent_dim - style_dim == 512.
+  style_dim: 512
+
+loss:
+  # Starting point from the Reddit advice: L1 dominant, tune perceptual and
+  # identity weights by watching validation metrics after the first ~5 epochs.
+  l1_weight:             1.0
+  perceptual_weight:     0.1   # VGG19 feature matching; raise if output is blurry
+  identity_weight:       0.5   # recon-vs-input ArcFace cosine; raise if faces drift identity
+  # z_id distilled toward the input's ArcFace embedding — the half that
+  # generalises to unseen identities.  Raise if unseen-face identity is weak.
+  latent_identity_weight: 1.0
+  # Adversarial pressure pushing z_style toward N(0, I).  Keep small; too high
+  # destabilises reconstruction.
+  adversarial_weight:     0.1
+  # Path to IR-SE50 .pth weights from InsightFace_Pytorch (see repo README for download links).
+  identity_weights_path: null  # e.g. /path/to/model_ir_se50.pth
+
+training:
+  batch_size:   32
+  num_epochs:   100
+  learning_rate: 0.0001
+  discriminator_lr: 0.0002   # AAE latent discriminator (Adam, betas 0.5/0.999)
+  num_workers:  4
+  output_dir:   checkpoints
+  save_every:   10         # save a numbered checkpoint every N epochs
+
+data:
+  # Set both for the recommended mixed strategy: FFHQ for recon quality,
+  # VGGFace2 for identity diversity.  Set only one if you have a single dataset.
+  ffhq_root:      null     # e.g. /data/ffhq_aligned
+  vggface2_root:  null     # e.g. /data/vggface2_aligned/train
+  image_size:     256
+  # Controls the FFHQ/VGGFace2 mix ratio when both roots are set.
+  # 0.3 means ~30% of training images come from FFHQ.
+  ffhq_ratio:     0.3
+  # Folder of faces of ~2 people NOT in the training roots. Each validation
+  # epoch their reconstructions are plotted to wandb (unseen-identity check).
+  holdout_dir:    null     # e.g. /data/holdout_unseen
+
+wandb:
+  enabled:  false          # set true to log scalars + reconstruction grids
+  project:  face-autoencoder
+  entity:   null           # your wandb username/team, or null for default
+  run_name: null           # null → wandb auto-names the run
+  mode:     online         # online | offline | disabled
