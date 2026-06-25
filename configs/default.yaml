@@ -46,7 +46,8 @@ data:
   ffhq_ratio:     0.3
   # Folder of faces of ~2 people NOT in the training roots. Each validation
   # epoch their reconstructions are plotted to wandb (unseen-identity check).
-  holdout_dir:    null     # e.g. /data/holdout_unseen
+  # Ships with two CC0 portraits (see holdout_unseen/SOURCES.md).
+  holdout_dir:    holdout_unseen
 
 wandb:
   enabled:  false          # set true to log scalars + reconstruction grids
