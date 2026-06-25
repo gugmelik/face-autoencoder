@@ -160,6 +160,7 @@ def train(cfg_path: str, resume: str | None = None) -> None:
 
     start_epoch   = 0
     best_val_loss = float('inf')
+    global_step   = 0
 
     if resume:
         ckpt = torch.load(resume, map_location=device)
@@ -169,7 +170,8 @@ def train(cfg_path: str, resume: str | None = None) -> None:
         d_optimizer.load_state_dict(ckpt['d_optimizer'])
         start_epoch   = ckpt['epoch'] + 1
         best_val_loss = ckpt.get('best_val_loss', float('inf'))
-        print(f"Resumed from epoch {ckpt['epoch']} (val_loss={best_val_loss:.4f})")
+        global_step   = ckpt.get('step', 0)
+        print(f"Resumed from epoch {ckpt['epoch']} / iter {global_step} (val_loss={best_val_loss:.4f})")
 
     # Data
     full_ds  = build_dataset(cfg, augment=True)
@@ -191,11 +193,14 @@ def train(cfg_path: str, resume: str | None = None) -> None:
     holdout = load_holdout(cfg, device)
 
     num_epochs  = cfg['training']['num_epochs']
-    save_every  = cfg['training'].get('save_every', 10)
+    save_every  = cfg['training'].get('save_every', 10)    # checkpoint every N epochs
+    val_every   = cfg['training'].get('val_every', 200)    # validate every N iterations
+    log_every   = cfg['training'].get('log_every', 20)     # log train loss every N iterations
 
-    def save_ckpt(path: Path, epoch: int) -> None:
+    def save_ckpt(path: Path, epoch: int, step: int) -> None:
         torch.save({
             'epoch':         epoch,
+            'step':          step,
             'model':         model.state_dict(),
             'disc':          disc.state_dict(),
             'optimizer':     optimizer.state_dict(),
@@ -204,10 +209,55 @@ def train(cfg_path: str, resume: str | None = None) -> None:
             'cfg':           cfg,
         }, path)
 
-    for epoch in range(start_epoch, num_epochs):
-        # ── train ──
+    def do_validation(step: int) -> float:
+        """Full validation pass; print + log to wandb at `step`; return mean val total loss."""
+        model.eval()
+        disc.eval()
+        v_losses: dict  = {}
+        v_metrics: dict = {}
+        val_vis = None
+        with torch.no_grad():
+            for imgs, _ in tqdm(val_loader, desc=f"val @ iter {step}", leave=False):
+                imgs = imgs.to(device)
+                recon, _, (z_style, z_id) = model(imgs)
+                _, breakdown = criterion(recon, imgs)
+                breakdown['latent_id'] = latent_id(z_id, imgs).item()
+                metrics = compute_all(recon, imgs)
+                for k, v in breakdown.items():
+                    v_losses[k]  = v_losses.get(k, 0.0) + v
+                for k, v in metrics.items():
+                    v_metrics[k] = v_metrics.get(k, 0.0) + v
+                if val_vis is None:  # keep first batch for the recon grid
+                    k = min(8, imgs.shape[0])
+                    val_vis = (imgs[:k].cpu(), recon[:k].cpu())
+
+        n_va = max(len(val_loader), 1)
+        print(f"\n[iter {step}]")
+        log_losses("val ", v_losses, n_va)
+        log_losses("metr", v_metrics, n_va)
+
+        if run is not None:
+            import wandb
+            payload = {f"val/{k}": v / n_va for k, v in v_losses.items()}
+            payload.update({f"metric/{k}": v / n_va for k, v in v_metrics.items()})
+            if val_vis is not None:
+                payload['val/reconstructions'] = wandb.Image(
+                    recon_grid(*val_vis), caption="top: original — bottom: reconstruction")
+            if holdout is not None:
+                with torch.no_grad():
+                    recon_h, _, _ = model(holdout)
+                payload['holdout/unseen_identities'] = wandb.Image(
+                    recon_grid(holdout.cpu(), recon_h.cpu()),
+                    caption="unseen identities — top: original, bottom: reconstruction")
+            run.log(payload, step=step)
+
         model.train()
         disc.train()
+        return v_losses.get('total', 0.0) / n_va
+
+    model.train()
+    disc.train()
+    for epoch in range(start_epoch, num_epochs):
         t_losses: dict = {}
         for imgs, _ in tqdm(train_loader, desc=f"[{epoch+1}/{num_epochs}] train", leave=False):
             imgs = imgs.to(device)
@@ -230,70 +280,35 @@ def train(cfg_path: str, resume: str | None = None) -> None:
             d_loss.backward()
             d_optimizer.step()
 
+            global_step += 1
+
             breakdown['latent_id'] = lat_id.item()
             breakdown['adv_g']     = g_loss.item()
             breakdown['adv_d']     = d_loss.item()
+            breakdown['ae_loss']   = ae_loss.item()
             for k, v in breakdown.items():
                 t_losses[k] = t_losses.get(k, 0.0) + v
 
-        # ── validate ──
-        model.eval()
-        disc.eval()
-        v_losses: dict  = {}
-        v_metrics: dict = {}
-        val_vis = None
-        with torch.no_grad():
-            for imgs, _ in tqdm(val_loader, desc=f"[{epoch+1}/{num_epochs}] val  ", leave=False):
-                imgs = imgs.to(device)
-                recon, _, (z_style, z_id) = model(imgs)
-                _, breakdown = criterion(recon, imgs)
-                breakdown['latent_id'] = latent_id(z_id, imgs).item()
-                metrics      = compute_all(recon, imgs)
+            # ── per-iteration train loss curves ──
+            if run is not None and global_step % log_every == 0:
+                run.log({**{f"train/{k}": v for k, v in breakdown.items()},
+                         'lr': scheduler.get_last_lr()[0]}, step=global_step)
 
-                for k, v in breakdown.items():
-                    v_losses[k]  = v_losses.get(k, 0.0) + v
-                for k, v in metrics.items():
-                    v_metrics[k] = v_metrics.get(k, 0.0) + v
+            # ── iteration-based validation ──
+            if global_step % val_every == 0:
+                val_total = do_validation(global_step)
+                if val_total < best_val_loss:
+                    best_val_loss = val_total
+                    save_ckpt(out_dir / 'best_model.pt', epoch, global_step)
+                    print(f"  ✓ best model saved (val_total={best_val_loss:.4f})")
 
-                if val_vis is None:  # keep first batch for the recon grid
-                    k = min(8, imgs.shape[0])
-                    val_vis = (imgs[:k].cpu(), recon[:k].cpu())
+        # ── epoch console summary ──
+        print(f"\nEpoch {epoch+1}/{num_epochs} done  (iter {global_step})")
+        log_losses("train(avg)", t_losses, len(train_loader))
 
-        print(f"\nEpoch {epoch+1}/{num_epochs}")
-        log_losses("train", t_losses, len(train_loader))
-        log_losses("val  ", v_losses, len(val_loader))
-        log_losses("metr ", v_metrics, len(val_loader))
-
-        val_total = v_losses.get('total', 0.0) / max(len(val_loader), 1)
-
-        # ── wandb: scalars + reconstruction grids ──
-        if run is not None:
-            import wandb
-            n_tr, n_va = len(train_loader), max(len(val_loader), 1)
-            payload = {'lr': scheduler.get_last_lr()[0]}
-            payload.update({f"train/{k}": v / n_tr for k, v in t_losses.items()})
-            payload.update({f"val/{k}":   v / n_va for k, v in v_losses.items()})
-            payload.update({f"metric/{k}": v / n_va for k, v in v_metrics.items()})
-            if val_vis is not None:
-                payload['val/reconstructions'] = wandb.Image(
-                    recon_grid(*val_vis), caption="top: original — bottom: reconstruction")
-            if holdout is not None:
-                with torch.no_grad():
-                    recon_h, _, _ = model(holdout)
-                payload['holdout/unseen_identities'] = wandb.Image(
-                    recon_grid(holdout.cpu(), recon_h.cpu()),
-                    caption="unseen identities — top: original, bottom: reconstruction")
-            run.log(payload, step=epoch)
-
-        # ── save best ──
-        if val_total < best_val_loss:
-            best_val_loss = val_total
-            save_ckpt(out_dir / 'best_model.pt', epoch)
-            print(f"  ✓ best model saved (val_total={best_val_loss:.4f})")
-
-        # ── periodic checkpoint ──
+        # ── periodic checkpoint (epoch-based) ──
         if (epoch + 1) % save_every == 0:
-            save_ckpt(out_dir / f'checkpoint_epoch{epoch+1:04d}.pt', epoch)
+            save_ckpt(out_dir / f'checkpoint_epoch{epoch+1:04d}.pt', epoch, global_step)
 
         scheduler.step()
 

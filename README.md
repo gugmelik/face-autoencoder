@@ -102,10 +102,22 @@ wandb:
 wandb login
 ```
 
-Logged per epoch: all train/val loss components (`l1`, `perceptual`, `identity`,
-`latent_id`, `adv_g`, `adv_d`), metrics (`psnr`, `ssim`, `identity_sim`), `lr`,
-a validation reconstruction grid, and the **unseen-identity** grid from
-`holdout_dir`. Training runs fine with `enabled: false`.
+Everything is logged against the **training iteration** (global step):
+- **Train loss curves** every `training.log_every` iterations — all components
+  (`l1`, `perceptual`, `identity`, `latent_id`, `adv_g`, `adv_d`, `ae_loss`) + `lr`.
+- **Validation** every `training.val_every` iterations — val losses, metrics
+  (`psnr`, `ssim`, `identity_sim`), a reconstruction grid, and the
+  **unseen-identity** grid from `holdout_dir`.
+
+Tune the cadence in the config:
+
+```yaml
+training:
+  val_every: 200   # run validation every 200 iterations
+  log_every: 20    # log train-loss curves every 20 iterations
+```
+
+Training runs fine with `wandb.enabled: false` (curves just aren't uploaded).
 
 ## 5. Train / evaluate
 
