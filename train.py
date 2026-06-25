@@ -259,7 +259,8 @@ def train(cfg_path: str, resume: str | None = None) -> None:
     disc.train()
     for epoch in range(start_epoch, num_epochs):
         t_losses: dict = {}
-        for imgs, _ in tqdm(train_loader, desc=f"[{epoch+1}/{num_epochs}] train", leave=False):
+        pbar = tqdm(train_loader, desc=f"[{epoch+1}/{num_epochs}] train", leave=False)
+        for imgs, _ in pbar:
             imgs = imgs.to(device)
 
             # ── phase 1: reconstruction + generator (autoencoder) ──
@@ -289,7 +290,17 @@ def train(cfg_path: str, resume: str | None = None) -> None:
             for k, v in breakdown.items():
                 t_losses[k] = t_losses.get(k, 0.0) + v
 
-            # ── per-iteration train loss curves ──
+            # ── live loss values on the progress bar (every iteration) ──
+            pbar.set_postfix(
+                ae=f"{breakdown['ae_loss']:.3f}",
+                l1=f"{breakdown['l1']:.3f}",
+                perc=f"{breakdown['perceptual']:.3f}",
+                id=f"{breakdown['identity']:.3f}",
+                lat=f"{breakdown['latent_id']:.3f}",
+                advD=f"{breakdown['adv_d']:.3f}",
+            )
+
+            # ── per-iteration train loss curves on wandb ──
             if run is not None and global_step % log_every == 0:
                 run.log({**{f"train/{k}": v for k, v in breakdown.items()},
                          'lr': scheduler.get_last_lr()[0]}, step=global_step)

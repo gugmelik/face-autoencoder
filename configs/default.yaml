@@ -35,7 +35,7 @@ training:
   output_dir:   checkpoints
   save_every:   10         # save a numbered checkpoint every N epochs
   val_every:    200        # run validation every N training iterations
-  log_every:    20         # log train-loss curves to wandb every N iterations
+  log_every:    1          # log train-loss curves to wandb every N iterations (1 = every iteration)
 
 data:
   # Set both for the recommended mixed strategy: FFHQ for recon quality,
