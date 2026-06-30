@@ -10,3 +10,6 @@ tqdm>=4.65.0
 PyYAML>=6.0
 wandb>=0.16.0
 huggingface_hub>=0.23.0
+# Evaluation only: INDEPENDENT identity verifier (InceptionResnetV1 / VGGFace2),
+# deliberately a different network than the IR-SE50 training teacher.
+facenet-pytorch>=2.5.3

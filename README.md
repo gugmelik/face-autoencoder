@@ -129,6 +129,30 @@ python evaluate.py --checkpoint checkpoints/best_model.pt \
                    --data-dir ./datasets/vggface2_test --vggface2
 ```
 
+### Disentanglement evaluation (identity/style swap)
+
+Tests whether `z = [z_style | z_id]` is actually disentangled by rebuilding faces
+from the **style of A** and the **identity of B**, scored with an **independent**
+recognition network (InceptionResnetV1/VGGFace2, *not* the IR-SE50 training
+teacher — see [utils/eval_identity.py](utils/eval_identity.py)).
+
+```bash
+pip install facenet-pytorch          # eval-only verifier
+python evaluate_swap.py --checkpoint checkpoints/best_model.pt \
+    --data-dir ./datasets/vggface2_test --vggface2 \
+    --num-pairs 1000 --grid 5 --output-dir eval_swap
+```
+
+Reports identity→B (transfer target, ↑), identity→A (leakage, ↓), transfer rate,
+reconstruction identity (sanity), and the different-identity floor. Writes
+`swap_matrix.png` (rows = attribute source, cols = identity source) and
+`interpolation.png` (fixed style, `z_id` morph). Good disentanglement → identity→B
+high and near recon identity, identity→A near the floor, transfer rate near 1.0.
+
+> Run this **before** writing the paper's claims — the result determines whether
+> you can claim disentanglement or should frame the work as an identity-preserving
+> autoencoder that generalises to unseen identities.
+
 ---
 
 ## 6. Deploying on RunPod
