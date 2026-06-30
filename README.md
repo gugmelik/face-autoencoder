@@ -153,6 +153,33 @@ high and near recon identity, identity→A near the floor, transfer rate near 1.
 > you can claim disentanglement or should frame the work as an identity-preserving
 > autoencoder that generalises to unseen identities.
 
+### Identity-conditioned generation (one reference → varied images)
+
+The core eval for the "one reference image, preserve identity" use case. Encode a
+reference → `z_id`, sample `z_style ~ N(0, I)` → new images of the same person.
+
+```bash
+pip install insightface onnxruntime lpips torchmetrics torch-fidelity matplotlib
+python evaluate_generation.py --checkpoint checkpoints/best_model.pt \
+    --data-dir ./datasets/ffhq_test \
+    --samples-per-ref 8 --num-refs 100 --grid-refs 6 [--fid] [--wandb]
+```
+
+Reports **identity_preservation** (cosine of generations to the reference, ↑),
+**identity_consistency** (std across samples, ↓), **diversity_lpips** (↑), the
+**prior match** (`z_style` per-dim mean→0 / std→1), and optional **generation_fid**.
+Writes `generations.png` (rows = references, cols = prior-sampled outputs) and
+`prior_hist.png`.
+
+### Reconstruction quality (`evaluate.py`)
+
+Now also reports **LPIPS**, **FID**, and **identity_sim_indep** (independent
+verifier) alongside PSNR/SSIM. Add `--wandb` to log results and the sample grid.
+
+> During *training*, wandb already shows `metric/lpips`, the AAE prior match
+> (`prior/style_mean_abs`, `prior/style_std`), and an `samples/identity_conditioned`
+> grid each validation — so you can watch generation behaviour as it trains.
+
 ---
 
 ## 6. Deploying on RunPod

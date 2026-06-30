@@ -96,10 +96,37 @@ def identity_similarity(pred: torch.Tensor, target: torch.Tensor) -> float:
     return (pred_emb * target_emb).sum(dim=1).mean().item()
 
 
+_lpips_cache: dict = {}
+
+
+def lpips_distance(pred: torch.Tensor, target: torch.Tensor):
+    """
+    Mean LPIPS perceptual distance (lower is better).  Expects [-1, 1].
+    Returns None if the `lpips` package is not installed (so training still runs).
+    """
+    try:
+        import lpips as _lpipslib
+    except ImportError:
+        return None
+    device = str(pred.device)
+    if device not in _lpips_cache:
+        net = _lpipslib.LPIPS(net='alex').eval().to(pred.device)
+        for p in net.parameters():
+            p.requires_grad_(False)
+        _lpips_cache[device] = net
+    with torch.no_grad():
+        d = _lpips_cache[device](pred.clamp(-1, 1), target.clamp(-1, 1))
+    return d.mean().item()
+
+
 def compute_all(pred: torch.Tensor, target: torch.Tensor) -> Dict[str, float]:
     """Convenience wrapper returning all metrics in one dict."""
-    return {
-        'psnr':               psnr(pred, target),
-        'ssim':               ssim(pred, target),
-        'identity_sim':       identity_similarity(pred, target),
+    out = {
+        'psnr':         psnr(pred, target),
+        'ssim':         ssim(pred, target),
+        'identity_sim': identity_similarity(pred, target),
     }
+    lp = lpips_distance(pred, target)
+    if lp is not None:
+        out['lpips'] = lp
+    return out

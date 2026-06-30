@@ -15,3 +15,8 @@ huggingface_hub>=0.23.0
 # IR-SE50/MS1M training teacher. Use onnxruntime-gpu instead for CUDA.
 insightface>=0.7.3
 onnxruntime>=1.17.0
+# Evaluation metrics & figures: LPIPS, FID, prior-diagnostic histogram.
+lpips>=0.1.4
+torchmetrics>=1.0.0
+torch-fidelity>=0.3.0        # backend for torchmetrics FID
+matplotlib>=3.7.0

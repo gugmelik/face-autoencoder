@@ -1,16 +1,18 @@
 """
-Evaluate a trained checkpoint on an unseen identity set.
+Evaluate a trained checkpoint on an unseen-identity set.
 
-The Reddit advice: test identity retention on people the model never saw
-during training.  This script runs on a separate held-out directory and
-reports PSNR, SSIM, and mean ArcFace cosine similarity.
+Reports reconstruction quality (PSNR, SSIM, LPIPS, FID) and identity retention.
+Identity is reported two ways:
+  - identity_sim       : the training teacher (IR-SE50) — for reference only
+  - identity_sim_indep : an INDEPENDENT verifier (InsightFace buffalo_l) — the
+    number to put in the paper, since it isn't the network you trained against.
 
 Usage:
     python evaluate.py \\
         --checkpoint checkpoints/best_model.pt \\
-        --data-dir   /data/vggface2_test_aligned \\
+        --data-dir   /data/ffhq_test \\
         --output-dir eval_results \\
-        --samples    8
+        --samples    8 [--vggface2] [--wandb]
 """
 import argparse
 from pathlib import Path
@@ -25,12 +27,18 @@ from models.autoencoder import FaceAutoencoder
 from utils.metrics import compute_all
 
 
+def _to_uint8(x: torch.Tensor) -> torch.Tensor:
+    """[-1,1] → uint8 [0,255] (B,3,H,W) for FID."""
+    return ((x.clamp(-1, 1) + 1.0) / 2.0 * 255.0).round().to(torch.uint8)
+
+
 def evaluate(
     checkpoint_path: str,
     data_dir:        str,
     output_dir:      str = 'eval_results',
     num_samples:     int = 8,
     use_vggface2:    bool = False,
+    use_wandb:       bool = False,
 ) -> None:
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -55,8 +63,25 @@ def evaluate(
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Independent identity verifier (different net than the training teacher).
+    try:
+        from utils.eval_identity import IndependentVerifier
+        verifier = IndependentVerifier(str(device))
+    except Exception as e:
+        print(f"WARNING: independent verifier unavailable ({e}); skipping identity_sim_indep.")
+        verifier = None
+
+    # FID accumulator (real = originals, fake = reconstructions).
+    try:
+        from torchmetrics.image.fid import FrechetInceptionDistance
+        fid = FrechetInceptionDistance(feature=2048, normalize=False).to(device)
+    except Exception as e:
+        print(f"WARNING: FID unavailable ({e}); skipping FID.  pip install torchmetrics torch-fidelity")
+        fid = None
+
     totals: dict = {}
     n_batches = 0
+    id_indep_sum, id_indep_n = 0.0, 0
     saved_grid = False
 
     with torch.no_grad():
@@ -68,6 +93,15 @@ def evaluate(
                 totals[k] = totals.get(k, 0.0) + v
             n_batches += 1
 
+            if verifier is not None:
+                cos = verifier.cosine(recon, imgs)
+                id_indep_sum += cos.sum().item()
+                id_indep_n   += cos.shape[0]
+
+            if fid is not None:
+                fid.update(_to_uint8(imgs),  real=True)
+                fid.update(_to_uint8(recon), real=False)
+
             if not saved_grid:
                 k        = min(num_samples, imgs.shape[0])
                 combined = torch.cat([imgs[:k], recon[:k]], dim=0)
@@ -75,10 +109,24 @@ def evaluate(
                 vutils.save_image(grid, out_dir / 'samples.png')
                 saved_grid = True
 
+    results = {k: v / n_batches for k, v in totals.items()}
+    if id_indep_n:
+        results['identity_sim_indep'] = id_indep_sum / id_indep_n
+    if fid is not None:
+        results['fid'] = fid.compute().item()
+
     print(f"\nEvaluation on {len(ds)} images:")
-    for k, v in totals.items():
-        print(f"  {k:20s} = {v / n_batches:.4f}")
+    for k, v in results.items():
+        print(f"  {k:20s} = {v:.4f}")
     print(f"\nSample grid saved → {out_dir}/samples.png")
+
+    if use_wandb:
+        import wandb
+        run = wandb.init(project=cfg.get('wandb', {}).get('project', 'face-autoencoder'),
+                         job_type='eval', config={'checkpoint': checkpoint_path, 'data_dir': data_dir})
+        run.log({**{f"eval/{k}": v for k, v in results.items()},
+                 'eval/samples': wandb.Image(str(out_dir / 'samples.png'))})
+        run.finish()
 
 
 if __name__ == '__main__':
@@ -89,5 +137,7 @@ if __name__ == '__main__':
     parser.add_argument('--samples',     type=int, default=8)
     parser.add_argument('--vggface2',    action='store_true',
                         help='Use VGGFace2Dataset (identity sub-dirs) instead of flat FFHQ layout')
+    parser.add_argument('--wandb',       action='store_true', help='Log results to wandb')
     args = parser.parse_args()
-    evaluate(args.checkpoint, args.data_dir, args.output_dir, args.samples, args.vggface2)
+    evaluate(args.checkpoint, args.data_dir, args.output_dir,
+             args.samples, args.vggface2, args.wandb)

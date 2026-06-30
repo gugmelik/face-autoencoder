@@ -216,6 +216,7 @@ def train(cfg_path: str, resume: str | None = None) -> None:
         v_losses: dict  = {}
         v_metrics: dict = {}
         val_vis = None
+        style_stat = None
         with torch.no_grad():
             for imgs, _ in tqdm(val_loader, desc=f"val @ iter {step}", leave=False):
                 imgs = imgs.to(device)
@@ -227,9 +228,12 @@ def train(cfg_path: str, resume: str | None = None) -> None:
                     v_losses[k]  = v_losses.get(k, 0.0) + v
                 for k, v in metrics.items():
                     v_metrics[k] = v_metrics.get(k, 0.0) + v
-                if val_vis is None:  # keep first batch for the recon grid
+                if val_vis is None:  # keep first batch for the recon grid + prior stats
                     k = min(8, imgs.shape[0])
                     val_vis = (imgs[:k].cpu(), recon[:k].cpu())
+                    # AAE prior diagnostic: z_style should look like N(0, I).
+                    style_stat = (z_style.mean(0).abs().mean().item(),   # → 0
+                                  z_style.std(0).mean().item())          # → 1
 
         n_va = max(len(val_loader), 1)
         print(f"\n[iter {step}]")
@@ -240,15 +244,29 @@ def train(cfg_path: str, resume: str | None = None) -> None:
             import wandb
             payload = {f"val/{k}": v / n_va for k, v in v_losses.items()}
             payload.update({f"metric/{k}": v / n_va for k, v in v_metrics.items()})
+            if style_stat is not None:
+                payload['prior/style_mean_abs'] = style_stat[0]   # target 0.0
+                payload['prior/style_std']      = style_stat[1]   # target 1.0
             if val_vis is not None:
                 payload['val/reconstructions'] = wandb.Image(
                     recon_grid(*val_vis), caption="top: original — bottom: reconstruction")
             if holdout is not None:
                 with torch.no_grad():
                     recon_h, _, _ = model(holdout)
+                    # Identity-conditioned generation: fix z_id from the first
+                    # reference, sample z_style ~ N(0, I) → varied images, same person.
+                    _, z_id_ref = model.split(model.encode(holdout[:1]))
+                    n_gen = 8
+                    z_id_rep   = z_id_ref.repeat(n_gen, 1)
+                    z_style_pr = torch.randn(n_gen, model.style_dim, device=device)
+                    gen = model.decode(torch.cat([z_style_pr, z_id_rep], dim=1))
                 payload['holdout/unseen_identities'] = wandb.Image(
                     recon_grid(holdout.cpu(), recon_h.cpu()),
                     caption="unseen identities — top: original, bottom: reconstruction")
+                payload['samples/identity_conditioned'] = wandb.Image(
+                    vutils.make_grid(torch.cat([holdout[:1], gen], 0).cpu(),
+                                     nrow=n_gen + 1, normalize=True, value_range=(-1, 1)),
+                    caption="leftmost: reference — rest: z_style~N(0,I), same z_id")
             run.log(payload, step=step)
 
         model.train()
