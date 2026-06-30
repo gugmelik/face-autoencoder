@@ -10,6 +10,8 @@ tqdm>=4.65.0
 PyYAML>=6.0
 wandb>=0.16.0
 huggingface_hub>=0.23.0
-# Evaluation only: INDEPENDENT identity verifier (InceptionResnetV1 / VGGFace2),
-# deliberately a different network than the IR-SE50 training teacher.
-facenet-pytorch>=2.5.3
+# Evaluation only: INDEPENDENT identity verifier (InsightFace buffalo_l /
+# w600k_r50, ONNX) — deliberately a different network + dataset than the
+# IR-SE50/MS1M training teacher. Use onnxruntime-gpu instead for CUDA.
+insightface>=0.7.3
+onnxruntime>=1.17.0

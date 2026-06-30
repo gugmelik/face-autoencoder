@@ -133,11 +133,11 @@ python evaluate.py --checkpoint checkpoints/best_model.pt \
 
 Tests whether `z = [z_style | z_id]` is actually disentangled by rebuilding faces
 from the **style of A** and the **identity of B**, scored with an **independent**
-recognition network (InceptionResnetV1/VGGFace2, *not* the IR-SE50 training
+recognition network (InsightFace buffalo_l / w600k_r50, *not* the IR-SE50 training
 teacher — see [utils/eval_identity.py](utils/eval_identity.py)).
 
 ```bash
-pip install facenet-pytorch          # eval-only verifier
+pip install insightface onnxruntime   # eval-only verifier (onnxruntime-gpu for CUDA)
 python evaluate_swap.py --checkpoint checkpoints/best_model.pt \
     --data-dir ./datasets/vggface2_test --vggface2 \
     --num-pairs 1000 --grid 5 --output-dir eval_swap
